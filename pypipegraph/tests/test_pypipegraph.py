@@ -897,7 +897,7 @@ test_modifies_shared_global = []
 
 
 class DataLoadingJobTests(PPGPerTest):
-    def test_modifies_slave(self):
+    def test_modifies_subordinate(self):
         # global shared
         # shared = "I was the the global in the mcp"
         def load():
@@ -3171,9 +3171,9 @@ class DependencyInjectionJobTests(PPGPerTest):
         # reference different objects.
         # I'm not sure how to handle this right now though.
 
-        # I have an idea: Do JobGraphModifyingJobs in each slave, and send back just the
+        # I have an idea: Do JobGraphModifyingJobs in each subordinate, and send back just the
         # dependency data (and new job name).
-        # that way, we can still execute on any slave, and all the pointers should be
+        # that way, we can still execute on any subordinate, and all the pointers should be
         # right.
         ppg.new_pipegraph(rc_gen(), dump_graph=False)
 

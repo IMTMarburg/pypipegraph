@@ -226,7 +226,7 @@ class Pipegraph(object):
         logger.info("now executing")
         self.install_signals()
         try:
-            self.spawn_slaves()
+            self.spawn_subordinates()
             self.execute_jobs()
 
         finally:
@@ -581,7 +581,7 @@ class Pipegraph(object):
                                     "job.invalidated called, but was_invalidated was false"
                                 )
                 # for preq in job.prerequisites:
-                # preq.require_loading() #think I can get away with  lettinng the slaves what they need to execute a given job...
+                # preq.require_loading() #think I can get away with  lettinng the subordinates what they need to execute a given job...
             else:
                 # logger.info("was done %s. Invalidation status: %s" % (job, job.was_invalidated))
                 pass
@@ -589,13 +589,13 @@ class Pipegraph(object):
         for job in self.jobs.values():
             if (
                 job.was_invalidated  # this has been invalidated
-                and job.runs_in_slave()  # it is not one of the invariantes
-                and not job.is_loadable()  # and it is not a loading job (these the slaves do automagically for now)
+                and job.runs_in_subordinate()  # it is not one of the invariantes
+                and not job.is_loadable()  # and it is not a loading job (these the subordinates do automagically for now)
             ):
                 needs_to_be_run.add(job.job_id)
-            elif not job.runs_in_slave():
+            elif not job.runs_in_subordinate():
                 # logger.info("Mark was_run before running: %s" % job)
-                # logger.info("job.was_invalidated %s, job.runs_in_slave %s, job.is_loadable: %s" % (job.was_invalidated, job.runs_in_slave(), job.is_loadable()))
+                # logger.info("job.was_invalidated %s, job.runs_in_subordinate %s, job.is_loadable: %s" % (job.was_invalidated, job.runs_in_subordinate(), job.is_loadable()))
                 job.was_run = True  # invarites get marked as ran..
             # job.do_cache = False
         # now prune the possible_execution_order
@@ -611,17 +611,17 @@ class Pipegraph(object):
             % [str(x) for x in self.possible_execution_order]
         )
 
-    def spawn_slaves(self):
-        """Tell the resource coordinator to get the slaves ready"""
-        logger.info("Spawning slaves")
-        self.slaves = self.rc.spawn_slaves()
+    def spawn_subordinates(self):
+        """Tell the resource coordinator to get the subordinates ready"""
+        logger.info("Spawning subordinates")
+        self.subordinates = self.rc.spawn_subordinates()
         self.check_all_jobs_can_be_executed()
 
     def check_all_jobs_can_be_executed(self):
         """Check all jobs for memory/cpu requirements and prune those that we can't satisfy"""
         resources = (
             self.rc.get_resources()
-        )  # a dict of slave name > {cores: y, memory: x}
+        )  # a dict of subordinate name > {cores: y, memory: x}
         maximal_memory = max(
             [x["physical_memory"] + x["swap_memory"] for x in resources.values()]
         )
@@ -642,7 +642,7 @@ class Pipegraph(object):
 
     def execute_jobs(self):
         """Pass control to ResourceCoordinator"""
-        self.jobs_by_slave = {}
+        self.jobs_by_subordinate = {}
         # the rc loop externalizes the start_jobs / job_executed, start more jobs
         self.running_jobs = set()
         if self.possible_execution_order:  # no jobs, no spawning...
@@ -664,30 +664,30 @@ class Pipegraph(object):
                 job.cleanup()
 
     def start_jobs(self):  # noqa:C901
-        """Instruct slaves to start as many jobs as we can currently spawn under our memory/cpu restrictions"""
+        """Instruct subordinates to start as many jobs as we can currently spawn under our memory/cpu restrictions"""
         # I really don't like this function... and I also have the strong inkling it should acttually sit in the resource coordinatora         # first, check what we actually have some resources...
         resources = (
             self.rc.get_resources()
-        )  # a dict of slave name > {cores: y, memory: x}
-        for slave in resources:
-            resources[slave]["memory/core"] = (
-                resources[slave]["physical_memory"] / resources[slave]["cores"]
+        )  # a dict of subordinate name > {cores: y, memory: x}
+        for subordinate in resources:
+            resources[subordinate]["memory/core"] = (
+                resources[subordinate]["physical_memory"] / resources[subordinate]["cores"]
             )
-            resources[slave]["memory"] = resources[slave]["physical_memory"]
-            resources[slave]["total cores"] = resources[slave]["cores"]
+            resources[subordinate]["memory"] = resources[subordinate]["physical_memory"]
+            resources[subordinate]["total cores"] = resources[subordinate]["cores"]
         # substract the running jobs
         for job in self.running_jobs:
-            slave = job.slave_name
+            subordinate = job.subordinate_name
             if (
                 job.cores_needed == -1 or job.modifies_jobgraph()
-            ):  # since that job blocks the slave..
-                resources[slave]["cores"] = 0
+            ):  # since that job blocks the subordinate..
+                resources[subordinate]["cores"] = 0
             else:
-                resources[slave]["cores"] -= 1
+                resources[subordinate]["cores"] -= 1
             if job.memory_needed == -1:
-                resources[slave]["memory"] -= resources[slave]["memory/core"]
+                resources[subordinate]["memory"] -= resources[subordinate]["memory/core"]
             else:
-                resources[slave]["memory"] -= job.memory_needed
+                resources[subordinate]["memory"] -= job.memory_needed
 
         logger.info(
             "Resources after substracting %i running jobs: %s"
@@ -697,8 +697,8 @@ class Pipegraph(object):
 
         def resources_available(resources):
             logger.info("resources available %s" % resources)
-            for slave in resources:
-                if resources[slave]["cores"] > 0 and resources[slave]["memory"] > 0:
+            for subordinate in resources:
+                if resources[subordinate]["cores"] > 0 and resources[subordinate]["memory"] > 0:
                     return True
             return False
 
@@ -750,8 +750,8 @@ class Pipegraph(object):
         while resources_available(resources) and runnable_jobs:
             logger.info("resources were available %s " % resources)
             to_remove = []
-            for slave in resources:
-                if resources[slave]["cores"] > 0 and resources[slave]["memory"] > 0:
+            for subordinate in resources:
+                if resources[subordinate]["cores"] > 0 and resources[subordinate]["memory"] > 0:
                     next_job = 0
                     logger.info(
                         "remaining %i jobs" % len(self.possible_execution_order)
@@ -764,97 +764,97 @@ class Pipegraph(object):
                         # and prioritize by that...
                         if job.modifies_jobgraph():
                             to_remove.append(job)  # remove just once...
-                            for slave in self.slaves:
-                                job.slave_name = slave
+                            for subordinate in self.subordinates:
+                                job.subordinate_name = subordinate
                                 logger.info("running_jobs added :%s" % job)
                                 self.running_jobs.add(job)
-                                self.slaves[slave].spawn(job)
-                                resources[slave][
+                                self.subordinates[subordinate].spawn(job)
+                                resources[subordinate][
                                     "cores"
                                 ] = (
                                     0
-                                )  # since the job modifying blocks the Slave-Process (runs in it), no point in spawning further ones till it has returned.
+                                )  # since the job modifying blocks the Subordinate-Process (runs in it), no point in spawning further ones till it has returned.
                             break
                         else:
                             if (
                                 (
                                     job.cores_needed == -1
-                                    and resources[slave]["cores"]
-                                    >= resources[slave]["total cores"] - 1
+                                    and resources[subordinate]["cores"]
+                                    >= resources[subordinate]["total cores"] - 1
                                 )  # -1 (use all cores) jobs also can be started if there's a single other (long running) one core job running
                                 or (
                                     job.cores_needed == -2
-                                    and resources[slave]["cores"]
-                                    == resources[slave]["total cores"]
+                                    and resources[subordinate]["cores"]
+                                    == resources[subordinate]["total cores"]
                                 )  # -2 (use all cores for realz) jobs only run if the machine is really empty...
                             ) and (
                                 job.memory_needed == -1
                                 or (
-                                    job.memory_needed < resources[slave]["memory"]
+                                    job.memory_needed < resources[subordinate]["memory"]
                                     or (
                                         (
-                                            resources[slave]["memory"]
-                                            == resources[slave]["physical_memory"]
+                                            resources[subordinate]["memory"]
+                                            == resources[subordinate]["physical_memory"]
                                         )
                                         and job.memory_needed
-                                        < resources[slave]["physical_memory"]
-                                        + resources[slave]["swap_memory"]
+                                        < resources[subordinate]["physical_memory"]
+                                        + resources[subordinate]["swap_memory"]
                                     )
                                 )
                             ):
-                                job.slave_name = slave
-                                self.slaves[slave].spawn(job)
+                                job.subordinate_name = subordinate
+                                self.subordinates[subordinate].spawn(job)
                                 logger.info("running_jobs added2 :%s" % job)
                                 self.running_jobs.add(job)
                                 to_remove.append(job)
-                                resources[slave]["cores"] = 0
+                                resources[subordinate]["cores"] = 0
                                 # don't worry about memory...
                                 break
                             elif (
-                                job.cores_needed <= resources[slave]["cores"]
+                                job.cores_needed <= resources[subordinate]["cores"]
                                 and (job.cores_needed != -1)
                                 and (
                                     job.memory_needed == -1
                                     or (
-                                        job.memory_needed < resources[slave]["memory"]
+                                        job.memory_needed < resources[subordinate]["memory"]
                                         or (
                                             (
-                                                resources[slave]["memory"]
-                                                == resources[slave]["physical_memory"]
+                                                resources[subordinate]["memory"]
+                                                == resources[subordinate]["physical_memory"]
                                             )
                                             and job.memory_needed
-                                            < resources[slave]["physical_memory"]
-                                            + resources[slave]["swap_memory"]
+                                            < resources[subordinate]["physical_memory"]
+                                            + resources[subordinate]["swap_memory"]
                                         )
                                     )
                                 )
                             ):
-                                job.slave_name = slave
+                                job.subordinate_name = subordinate
                                 try:
-                                    self.slaves[slave].spawn(job)
+                                    self.subordinates[subordinate].spawn(job)
                                 except Exception:
                                     print("failed to start", job)
                                     raise
                                 logger.info("running_jobs added3 :%s" % job)
                                 self.running_jobs.add(job)
                                 to_remove.append(job)
-                                resources[slave]["cores"] -= job.cores_needed
+                                resources[subordinate]["cores"] -= job.cores_needed
                                 if job.memory_needed == -1:
-                                    resources[slave]["memory"] -= resources[slave][
+                                    resources[subordinate]["memory"] -= resources[subordinate][
                                         "memory/core"
                                     ]
                                 else:
-                                    resources[slave]["memory"] -= job.memory_needed
+                                    resources[subordinate]["memory"] -= job.memory_needed
                                 break
                             else:
                                 # this job needed to much resources, or was not runnable
                                 logger.info("Job needed too many resources %s" % job)
                                 runnable_jobs.remove(
                                     job
-                                )  # can't run right now on this slave..., maybe later...
+                                )  # can't run right now on this subordinate..., maybe later...
                         next_job += 1
                     logger.info("Resources after spawning %s" % resources)
-                    # we do this for every slave...
+                    # we do this for every subordinate...
                     for job in to_remove:
                         logger.info("removing job %s" % job)
                         self.possible_execution_order.remove(
@@ -911,7 +911,7 @@ class Pipegraph(object):
             job.stderr_handle.close()
         if (
             not job.is_loadable()
-        ):  # dataloading jobs are not 'seperatly' executed, but still, they may be signaled as failed by a slave.
+        ):  # dataloading jobs are not 'seperatly' executed, but still, they may be signaled as failed by a subordinate.
             logger.info("running_jobs removed :%s" % job)
             self.running_jobs.remove(job)
         # self.signal_job_done()
@@ -988,20 +988,20 @@ class Pipegraph(object):
                 logger.info("Adding %s to possible_execution_order" % (job,))
                 self.possible_execution_order.append(job)
                 self.jobs_to_run_count += 1
-            elif not job.runs_in_slave():
+            elif not job.runs_in_subordinate():
                 logger.info("ignoring invariant - does not need to run %s " % (job,))
                 logger.info("Setting %s.was_run to true, generated" % (job,))
                 job.was_run = True  # invarites get marked as ran..
             else:
                 logger.info("Not doing anything with %s, was done" % (job,))
                 pass
-        # for slave in self.slaves.values():
-        # slave.transmit_new_jobs(new_jobs)
+        # for subordinate in self.subordinates.values():
+        # subordinate.transmit_new_jobs(new_jobs)
         self.check_all_jobs_can_be_executed()  # for this, the job must be in possible_execution_order
 
     def tranfer_new_jobs(self):
         """push jobs from self.new_jobs into self.jobs.
-        This is called in a remote slave that just created a bunch of jobs and send them of to the master,
+        This is called in a remote subordinate that just created a bunch of jobs and send them of to the main,
         so that they're still fresh"""
         for job_id in self.new_jobs:
             self.jobs[job_id] = self.new_jobs[job_id]

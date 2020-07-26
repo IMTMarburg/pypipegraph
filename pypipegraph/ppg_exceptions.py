@@ -64,6 +64,6 @@ class JobDiedException(PyPipeGraphError):
 
 
 class CommunicationFailure(PyPipeGraphError):
-    """something went wrong talking to a slave"""
+    """something went wrong talking to a subordinate"""
 
     pass

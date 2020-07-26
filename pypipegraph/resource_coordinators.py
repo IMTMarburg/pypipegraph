@@ -54,7 +54,7 @@ import tempfile
 
 
 class DummyResourceCoordinator:
-    """For the calculating slaves. so it throws exceptions..."""
+    """For the calculating subordinates. so it throws exceptions..."""
 
 
 def get_memory_available():
@@ -90,12 +90,12 @@ class LocalSystem:
     """A ResourceCoordinator that uses the current machine,
     up to max_cores_to_use cores of it
 
-    It uses multiprocessing and the LocalSlave
+    It uses multiprocessing and the LocalSubordinate
     """
 
     def __init__(self, max_cores_to_use=util.CPUs(), profile=False, interactive=True):
         self.max_cores_to_use = max_cores_to_use  # todo: update to local cpu count...
-        self.slave = LocalSlave(self)
+        self.subordinate = LocalSubordinate(self)
         self.cores_available = max_cores_to_use
         self.physical_memory, self.swap_memory = get_memory_available()
         self.timeout = 5
@@ -106,12 +106,12 @@ class LocalSystem:
             interactive = False
         self.interactive = interactive
 
-    def spawn_slaves(self):
-        return {"LocalSlave": self.slave}
+    def spawn_subordinates(self):
+        return {"LocalSubordinate": self.subordinate}
 
     def get_resources(self):
         res = {
-            "LocalSlave": {  # this is always the maximum available - the graph is handling the bookeeping of running jobs
+            "LocalSubordinate": {  # this is always the maximum available - the graph is handling the bookeeping of running jobs
                 "cores": self.cores_available,
                 "physical_memory": self.physical_memory,
                 "swap_memory": self.swap_memory,
@@ -121,7 +121,7 @@ class LocalSystem:
         return res
 
     def enter_loop(self):
-        self.spawn_slaves()
+        self.spawn_subordinates()
         if sys.version_info[0] == 2:
             self.que = MPQueueFixed()
         else:
@@ -136,7 +136,7 @@ class LocalSystem:
             interactive_thread.start()
             s = signal.signal(signal.SIGINT, signal_handler)  # ignore ctrl-c
         while True:
-            self.slave.check_for_dead_jobs()  # whether time out or or job was done, let's check this...
+            self.subordinate.check_for_dead_jobs()  # whether time out or or job was done, let's check this...
             if self.interactive:
                 self.see_if_output_is_requested()
             try:
@@ -145,15 +145,15 @@ class LocalSystem:
                 if (
                     r is None and interactive.interpreter.terminated
                 ):  # abort was requested
-                    self.slave.kill_jobs()
+                    self.subordinate.kill_jobs()
                     break
-                slave_id, was_ok, job_id_done, stdout, stderr, exception, trace, new_jobs = (
+                subordinate_id, was_ok, job_id_done, stdout, stderr, exception, trace, new_jobs = (
                     r
                 )  # was there a job done?t
                 logger.info("Job returned: %s, was_ok: %s" % (job_id_done, was_ok))
                 logger.info("Remaining in que (approx): %i" % self.que.qsize())
                 job = self.pipegraph.jobs[job_id_done]
-                job.was_done_on.add(slave_id)
+                job.was_done_on.add(subordinate_id)
                 job.stdout = stdout
                 job.stderr = stderr
                 job.exception = exception
@@ -240,36 +240,36 @@ class LocalSystem:
         self.que.put(None)
 
     def kill_job(self, job):
-        self.slave.kill_job(job)
+        self.subordinate.kill_job(job)
 
     def get_job_pid(self, job):
-        return self.slave.get_job_pid(job)
+        return self.subordinate.get_job_pid(job)
 
 
-class LocalSlave:
+class LocalSubordinate:
     def __init__(self, rc):
         self.rc = rc
-        self.slave_id = "LocalSlave"
-        logger.info("LocalSlave pid: %i (runs in MCP!)" % os.getpid())
+        self.subordinate_id = "LocalSubordinate"
+        logger.info("LocalSubordinate pid: %i (runs in MCP!)" % os.getpid())
         self.process_to_job = {}
 
     def spawn(self, job):
-        logger.info("Slave: Spawning %s" % job.job_id)
+        logger.info("Subordinate: Spawning %s" % job.job_id)
         job.start_time = time.time()
-        # logger.info("Slave: preqs are %s" % [preq.job_id for preq in job.prerequisites])
+        # logger.info("Subordinate: preqs are %s" % [preq.job_id for preq in job.prerequisites])
         preq_failed = False
         if not job.is_final_job:  # final jobs don't load their (fake) prereqs.
             for preq in job.prerequisites:
                 if preq.is_loadable():
-                    logger.info("Slave: Loading %s" % preq)
+                    logger.info("Subordinate: Loading %s" % preq)
                     if not self.load_job(preq):
-                        logger.info("Slave: Preq failed %s" % preq)
+                        logger.info("Subordinate: Preq failed %s" % preq)
                         preq_failed = True
                         break
         if preq_failed:
             self.rc.que.put(
                 (
-                    self.slave_id,
+                    self.subordinate_id,
                     False,  # failed?
                     job.job_id,  # id...
                     "",  # output
@@ -282,13 +282,13 @@ class LocalSlave:
             time.sleep(0)
         else:
             if job.modifies_jobgraph():
-                logger.info("Slave: Running %s in slave" % job)
+                logger.info("Subordinate: Running %s in subordinate" % job)
                 stdout = tempfile.SpooledTemporaryFile(mode="w+")
                 stderr = tempfile.SpooledTemporaryFile(mode="w+")
                 self.run_a_job(job, stdout, stderr)
-                logger.info("Slave: returned from %s in slave, data was put" % job)
+                logger.info("Subordinate: returned from %s in subordinate, data was put" % job)
             else:
-                logger.info("Slave: Forking for %s" % job.job_id)
+                logger.info("Subordinate: Forking for %s" % job.job_id)
                 stdout = tempfile.TemporaryFile(
                     mode="w+"
                 )  # no more spooling - it doesn't get passed back
@@ -304,9 +304,9 @@ class LocalSlave:
                 job.run_info = "pid = %s" % (p.pid,)
                 job.pid = p.pid
 
-                logger.info("Slave pid: %s" % (p.pid,))
+                logger.info("Subordinate pid: %s" % (p.pid,))
                 self.process_to_job[p] = job
-                logger.info("Slave, returning to start_jobs")
+                logger.info("Subordinate, returning to start_jobs")
 
     def load_job(
         self, job
@@ -343,7 +343,7 @@ class LocalSlave:
         if not was_ok:
             self.rc.que.put(
                 (
-                    self.slave_id,
+                    self.subordinate_id,
                     was_ok,  # failed?
                     job.job_id,  # id...
                     stdout_text,  # output
@@ -448,7 +448,7 @@ class LocalSlave:
         # logger.info("Now putting job data into que: %s - %s" % (job, os.getpid()))
         self.rc.que.put(
             (
-                self.slave_id,
+                self.subordinate_id,
                 was_ok,  # failed?
                 job.job_id,  # id...
                 stdout_text,  # output
@@ -473,7 +473,7 @@ class LocalSlave:
         self.rc.pipegraph.new_jobs_generated_during_runtime(job_dict)
         return pickle.dumps(
             {}
-        )  # The LocalSlave does not need to serialize back the jobs, it already is running in the space of the MCP
+        )  # The LocalSubordinate does not need to serialize back the jobs, it already is running in the space of the MCP
 
     def check_for_dead_jobs(self):
         remove = []
@@ -497,7 +497,7 @@ class LocalSlave:
                     job.stderr_handle = None
                     self.rc.que.put(
                         (
-                            self.slave_id,
+                            self.subordinate_id,
                             False,
                             job.job_id,
                             stdout,
