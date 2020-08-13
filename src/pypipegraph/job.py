@@ -40,6 +40,7 @@ import traceback
 import platform
 import time
 import six
+import types
 import pickle
 from io import StringIO
 from pathlib import Path
@@ -557,7 +558,7 @@ class _InvariantJob(Job):
 
 
 def get_cython_filename_and_line_no(cython_func):
-    pattern = re.compile(".* file \"(?P<file_name>.*)\", line (?P<line>\d*)>")
+    pattern = re.compile(r'.* file "(?P<file_name>.*)", line (?P<line>\d*)>')
     match = pattern.match(str(cython_func.func_code))
     if match:
         line_no = int(match.group("line"))
@@ -677,11 +678,16 @@ class FunctionInvariant(_InvariantJob):
     def _get_invariant_from_non_python_function(cls, function):
         if str(function).startswith("<built-in function"):
             return str(function)
-        elif hasattr(function, "im_func") and (
-            "cyfunction" in repr(function.im_func)
-            or repr(function.im_func).startswith("<built-in function")
-        ):
+        elif (
+            hasattr(function, "im_func")
+            and (
+                "cyfunction" in repr(function.im_func)
+                or repr(function.im_func).startswith("<built-in function")
+            )
+        ) or "cython_function_or_method" in str(type(function)):
             return cls.get_cython_source(function)
+        elif isinstance(function, types.MethodType) and "cython_function_or_method" in str(type(function.__func__)):
+            return cls.get_cython_source(function.__func__)
         else:
             # print(repr(function))
             # print(repr(function.im_func))
@@ -690,12 +696,10 @@ class FunctionInvariant(_InvariantJob):
     @classmethod
     def _get_func_hash(cls, key, function):
         if not util.global_pipegraph or key not in util.global_pipegraph.func_hashes:
-            if type(function).__name__ == "cython_function_or_method":
-                source = get_cython_filename_and_line_no(function)
-            else:
-                source = inspect.getsource(function).strip()
+            print("_get_func_hash", type(function))
+            source = inspect.getsource(function).strip()
             # cut off function definition / name, but keep parameters
-            if isinstance(source, str) and source.startswith("def"):
+            if source.startswith("def"):
                 source = source[source.find("(") :]
             # filter doc string
             if function.__doc__:
@@ -714,8 +718,7 @@ class FunctionInvariant(_InvariantJob):
 
     @classmethod
     def _hash_function(cls, function):
-        if not hasattr(function, "__code__"):
-            return cls._get_invariant_from_non_python_function(function)
+        print("hash_function", type(function))
         key = id(function.__code__)
         new_source, new_funchash = cls._get_func_hash(key, function)
         new_closure = cls.extract_closure(function)
@@ -725,8 +728,16 @@ class FunctionInvariant(_InvariantJob):
         if self.function is None:
             # since the 'default invariant' is False, this will still read 'invalidated the first time it's being used'
             return None
-        if not hasattr(self.function, "__code__"):
+        if (not hasattr(self.function, "__code__")) or (
+            "cython_function_or_method" in str(type(self.function))
+            or (
+                isinstance(self.function, types.MethodType)
+                and "cython_function_or_method" in str(type(self.function.__func__))
+            )
+        ):
+
             return self._get_invariant_from_non_python_function(self.function)
+        print("get_invariant", type(self.function))
         new_source, new_funchash, new_closure = self._hash_function(self.function)
         return self._compare_new_and_old(new_source, new_funchash, new_closure, old)
 
@@ -753,7 +764,9 @@ class FunctionInvariant(_InvariantJob):
             new["old"] = new_funchash + new_closure
         elif old is False:  # never ran before
             return new
-        elif old is None:  # if you provided a None type instead of a function, you will run into this
+        elif (
+            old is None
+        ):  # if you provided a None type instead of a function, you will run into this
             return new
         else:  # pragma: no cover
             raise ValueError(
@@ -871,6 +884,7 @@ class FunctionInvariant(_InvariantJob):
 
         # check there's actually the file and line no documentation
         filename, line_no = get_cython_filename_and_line_no(cython_func)
+        print(filename, line_no)
 
         # load the source code
         op = open(filename, "rb")
@@ -894,13 +908,15 @@ class FunctionInvariant(_InvariantJob):
             remaining_lines = text.split("\n")
         last_line = len(remaining_lines)
         for ii, line in enumerate(remaining_lines):
+            if ii == 0:
+                continue
             line_strip = line.strip()
             if line_strip:
-                indent = len(line) - len(line_strip)
-                if indent < first_line_indent:
+                indent = len(line) - len(line.lstrip())
+                if indent <= first_line_indent:
                     last_line = ii
                     break
-        return "\n".join(remaining_lines[:last_line]).strip()
+        return "\n".join(remaining_lines[:last_line])
 
 
 class ParameterInvariant(_InvariantJob):
