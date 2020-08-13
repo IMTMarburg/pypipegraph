@@ -557,48 +557,54 @@ class _InvariantJob(Job):
 
 
 def get_cython_filename_and_line_no(cython_func):
-    first_doc_line = cython_func.__doc__.split("\n")[0]
-    if not first_doc_line.startswith("File:"):
-        raise ValueError(
-            "No file/line information in doc string. Make sure your cython is compiled with -p (or #embed_pos_in_docstring=True atop your pyx"
+    pattern = re.compile(".* file \"(?P<file_name>.*)\", line (?P<line>\d*)>")
+    match = pattern.match(str(cython_func.func_code))
+    if match:
+        line_no = int(match.group("line"))
+        filename = match.group("file_name")
+    else:
+        first_doc_line = cython_func.__doc__.split("\n")[0]
+        module_name = cython_func.__module__
+        if not first_doc_line.startswith("File:"):
+            raise ValueError(
+                "No file/line information in doc string. Make sure your cython is compiled with -p (or #embed_pos_in_docstring=True atop your pyx"
+            )
+        line_no = int(
+            first_doc_line[
+                first_doc_line.find("starting at line ")
+                + len("starting at line ") : first_doc_line.find(")")
+            ]
         )
-    line_no = int(
-        first_doc_line[
-            first_doc_line.find("starting at line ")
-            + len("starting at line ") : first_doc_line.find(")")
-        ]
-    )
-
-    # find the right module
-    module_name = cython_func.im_class.__module__
-    found = False
-    for name in sorted(sys.modules):
-        if name == module_name or name.endswith("." + module_name):
-            try:
-                if (
-                    getattr(sys.modules[name], cython_func.im_class.__name__)
-                    == cython_func.im_class
-                ):
-                    found = sys.modules[name]
-                    break
-            except AttributeError:  # pragma: no cover
-                continue
-        elif hasattr(sys.modules[name], module_name):
-            sub_module = getattr(sys.modules[name], module_name)
-            try:  # pragma: no cover
-                if (
-                    getattr(sub_module, cython_func.im_class.__name__)
-                    == cython_func.im_class
-                ):
-                    found = sys.moduls[name].sub_module
-                    break
-            except AttributeError:
-                continue
-    if not found:  # pragma: no cover
-        raise ValueError("Could not find module for %s" % cython_func)
-    filename = found.__file__.replace(".so", ".pyx").replace(
-        ".pyc", ".py"
-    )  # pyc replacement is for mock testing
+        # find the right module
+        module_name = cython_func.im_class.__module__
+        found = False
+        for name in sorted(sys.modules):
+            if name == module_name or name.endswith("." + module_name):
+                try:
+                    if (
+                        getattr(sys.modules[name], cython_func.im_class.__name__)
+                        == cython_func.im_class
+                    ):
+                        found = sys.modules[name]
+                        break
+                except AttributeError:  # pragma: no cover
+                    continue
+            elif hasattr(sys.modules[name], module_name):
+                sub_module = getattr(sys.modules[name], module_name)
+                try:  # pragma: no cover
+                    if (
+                        getattr(sub_module, cython_func.im_class.__name__)
+                        == cython_func.im_class
+                    ):
+                        found = sys.moduls[name].sub_module
+                        break
+                except AttributeError:
+                    continue
+        if not found:  # pragma: no cover
+            raise ValueError("Could not find module for %s" % cython_func)
+        filename = found.__file__.replace(".so", ".pyx").replace(
+            ".pyc", ".py"
+        )  # pyc replacement is for mock testing
     return filename, line_no
 
 
@@ -684,9 +690,12 @@ class FunctionInvariant(_InvariantJob):
     @classmethod
     def _get_func_hash(cls, key, function):
         if not util.global_pipegraph or key not in util.global_pipegraph.func_hashes:
-            source = inspect.getsource(function).strip()
+            if type(function).__name__ == "cython_function_or_method":
+                source = get_cython_filename_and_line_no(function)
+            else:
+                source = inspect.getsource(function).strip()
             # cut off function definition / name, but keep parameters
-            if source.startswith("def"):
+            if isinstance(source, str) and source.startswith("def"):
                 source = source[source.find("(") :]
             # filter doc string
             if function.__doc__:
