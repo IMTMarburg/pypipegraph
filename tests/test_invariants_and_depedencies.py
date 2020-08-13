@@ -945,56 +945,6 @@ class TestFunctionInvariant:
         a = ppg.FunctionInvariant("test", sorted)
         a._get_invariant(None, [])
 
-    def test_cython_function(self):
-        # horrible mocking hack to see that it actually extracts something, - not tested if it's the right thing...
-        # probably unnecssary now that we have TestCythonCompability
-        import stat
-
-        class MockImClass:
-            __module__ = "stat"  # whatever
-            __name__ = "MockIM"
-
-        class MockCython:
-            __doc__ = "File:stat.py starting at line 22)\nHello world"
-            im_func = "cyfunction shu"
-            im_class = MockImClass
-
-            def __call__(self):
-                pass
-
-            def __repr__(self):
-                return "cyfunction mockup"
-
-        class MockCythonWithoutFileInfo:
-            __doc__ = "Hello world"
-            im_func = "cyfunction shu"
-            im_class = MockImClass
-
-            def __call__(self):
-                pass
-
-            def __repr__(self):
-                return "cyfunction mockup"
-
-        c = MockCython()
-        c2 = MockCythonWithoutFileInfo
-        mi = MockImClass()
-        stat.MockIM = mi
-        c.im_class = mi
-
-        assert len(ppg.util.global_pipegraph.func_hashes) == 0
-        a = ppg.FunctionInvariant("test", c)
-        a._get_invariant(None, [])
-        assert len(ppg.util.global_pipegraph.func_hashes) == 0
-
-        b = ppg.FunctionInvariant("test2", c2)
-        with pytest.raises(ValueError):
-            b._get_invariant(None, [])
-        assert len(ppg.util.global_pipegraph.func_hashes) == 0
-
-        assert ppg.job.function_to_str(c).endswith("stat.py 22")
-        assert ppg.FunctionInvariant.get_cython_source(c) == "return mode & 0o7777"
-
     def test_buildin_function(self):
         a = ppg.FunctionInvariant("a", open)
         assert "<built-in" in str(a)
@@ -1983,21 +1933,19 @@ RETURN_VALUE"""
 
 
 @pytest.mark.usefixtures("new_pipegraph")
-class TestCythonCompability():
-
-
+class TestCythonCompability:
     def test_just_a_function(self):
         import cython
 
-        src ="""
+        src = """
 def a():
     return 1
 
 def b():
     return 5
 """
-        func = cython.inline(src)['a']
-        actual = ppg.FunctionInvariant('a',func).get_invariant(None, {})
+        func = cython.inline(src)["a"]
+        actual = ppg.FunctionInvariant("a", func).get_invariant(None, {})
         should = """    def a():
         return 1
     """
@@ -2006,7 +1954,7 @@ def b():
     def test_nested_function(self):
         import cython
 
-        src ="""
+        src = """
 def a():
     def b():
         return 1
@@ -2015,8 +1963,8 @@ def a():
 def c():
     return 5
 """
-        func = cython.inline(src)['a']()
-        actual = ppg.FunctionInvariant('a',func).get_invariant(None, {})
+        func = cython.inline(src)["a"]()
+        actual = ppg.FunctionInvariant("a", func).get_invariant(None, {})
         should = """        def b():
             return 1"""
         assert actual == should
@@ -2024,7 +1972,7 @@ def c():
     def test_class(self):
         import cython
 
-        src ="""
+        src = """
 class A():
     def b(self):
         return 55
@@ -2032,9 +1980,9 @@ class A():
 def c():
     return 5
 """
-        import inspect
-        func = cython.inline(src)['A']().b
-        actual = ppg.FunctionInvariant('a',func).get_invariant(None, {})
+
+        func = cython.inline(src)["A"]().b
+        actual = ppg.FunctionInvariant("a", func).get_invariant(None, {})
         should = """        def b(self):
             return 55
     """
@@ -2043,7 +1991,7 @@ def c():
     def test_class_inner_function(self):
         import cython
 
-        src ="""
+        src = """
 class A():
     def b(self):
         def c():
@@ -2053,9 +2001,9 @@ class A():
 def d():
     return 5
 """
-        import inspect
-        func = cython.inline(src)['A']().b()
-        actual = ppg.FunctionInvariant('a',func).get_invariant(None, {})
+
+        func = cython.inline(src)["A"]().b()
+        actual = ppg.FunctionInvariant("a", func).get_invariant(None, {})
         should = """            def c():
                 return 55"""
         assert actual == should
