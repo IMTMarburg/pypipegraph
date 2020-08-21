@@ -698,7 +698,6 @@ class FunctionInvariant(_InvariantJob):
     @classmethod
     def _get_func_hash(cls, key, function):
         if not util.global_pipegraph or key not in util.global_pipegraph.func_hashes:
-            print("_get_func_hash", type(function))
             source = inspect.getsource(function).strip()
             # cut off function definition / name, but keep parameters
             if source.startswith("def"):
@@ -720,7 +719,6 @@ class FunctionInvariant(_InvariantJob):
 
     @classmethod
     def _hash_function(cls, function):
-        print("hash_function", type(function))
         key = id(function.__code__)
         new_source, new_funchash = cls._get_func_hash(key, function)
         new_closure = cls.extract_closure(function)
@@ -739,7 +737,6 @@ class FunctionInvariant(_InvariantJob):
         ):
 
             return self._get_invariant_from_non_python_function(self.function)
-        print("get_invariant", type(self.function))
         new_source, new_funchash, new_closure = self._hash_function(self.function)
         return self._compare_new_and_old(new_source, new_funchash, new_closure, old)
 
