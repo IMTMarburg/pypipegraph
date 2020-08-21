@@ -686,7 +686,9 @@ class FunctionInvariant(_InvariantJob):
             )
         ) or "cython_function_or_method" in str(type(function)):
             return cls.get_cython_source(function)
-        elif isinstance(function, types.MethodType) and "cython_function_or_method" in str(type(function.__func__)):
+        elif isinstance(
+            function, types.MethodType
+        ) and "cython_function_or_method" in str(type(function.__func__)):
             return cls.get_cython_source(function.__func__)
         else:
             # print(repr(function))
@@ -1331,6 +1333,8 @@ class MultiFileGeneratingJob(FileGeneratingJob):
         """If @rename_broken is set, any eventual outputfile that exists
         when the job crashes will be renamed to output_filename + '.broken'
         (overwriting whatever was there before)
+
+        @empty_ok may be a bool or a dict (filenames: str -> bool)
         """
         # filenames = sorted([verify_job_id(f) for f in filenames])
         self.verify_arguments(function, rename_broken, empty_ok)
@@ -1343,6 +1347,11 @@ class MultiFileGeneratingJob(FileGeneratingJob):
         self.rename_broken = rename_broken
         self.do_ignore_code_changes = False
         self.empty_ok = empty_ok
+        if isinstance(self.empty_ok, dict):
+            if set(self.filenames) != set(self.empty_ok):
+                raise ValueError(
+                    "empty_ok had a different set of filenames than were passed to the MultiFileGeneratingJob"
+                )
 
     def verify_arguments(self, function, rename_broken, empty_ok):
         if not hasattr(function, "__call__"):
@@ -1363,7 +1372,11 @@ class MultiFileGeneratingJob(FileGeneratingJob):
 
     def calc_is_done(self, depth=0):
         for fn in self.filenames:
-            if self.empty_ok:
+            if (
+                self.empty_ok is True
+                or isinstance(self.empty_ok, dict)
+                and self.empty_ok[fn]
+            ):
                 if not util.file_exists(fn):
                     return False
             else:
@@ -1404,13 +1417,18 @@ class MultiFileGeneratingJob(FileGeneratingJob):
             six.reraise(*exc_info)
         self._is_done = None
         missing_files = []
-        if self.empty_ok:
-            filecheck = util.file_exists
-        else:
-            filecheck = util.output_file_exists
-        for f in self.filenames:
-            if not filecheck(f):
-                missing_files.append(f)
+        for fn in self.filenames:
+            if (
+                self.empty_ok is True
+                or isinstance(self.empty_ok, dict)
+                and self.empty_ok[fn]
+            ):
+                filecheck = util.file_exists
+            else:
+                filecheck = util.output_file_exists
+            if not filecheck(fn):
+                missing_files.append(fn)
+
         if missing_files:
             raise ppg_exceptions.JobContractError(
                 "%s did not create all of its files.\nMissing were:\n %s"
