@@ -145,7 +145,7 @@ def job_or_filename(job_or_filename, invariant_class=None):
     elif job_or_filename is not None:
         filename = job_or_filename
         deps = [invariant_class(filename)]
-    else:
+    else:  # = None
         filename = None
         deps = []
     return filename, deps
