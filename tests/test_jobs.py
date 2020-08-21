@@ -626,6 +626,43 @@ class TestMultiFileGeneratingJob:
             assert read(f) == "shu"
         assert read(of[-1]) == ""
 
+    def test_empty_dict(self, new_pipegraph):
+        of = ["out/a", "out/b"]
+
+        def do_write():
+            for f in of:
+                append(f, "shu")
+            write(of[-1], "")  # last one is empty
+
+        ppg.MultiFileGeneratingJob(of, do_write, empty_ok={of[0]: False, of[1]: True})
+        ppg.run_pipegraph()
+        for f in of[:-1]:
+            assert read(f) == "shu"
+        assert read(of[-1]) == ""
+
+        new_pipegraph.new_pipegraph()
+        of = ["out/a1", "out/b2"]
+        j = ppg.MultiFileGeneratingJob(
+            of, do_write, empty_ok={of[0]: False, of[1]: False}
+        )
+        with pytest.raises(ppg.RuntimeError):
+            ppg.run_pipegraph()
+        assert isinstance(j.exception, ppg.JobContractError)
+
+        new_pipegraph.new_pipegraph()
+        with pytest.raises(ValueError):
+            j = ppg.MultiFileGeneratingJob(
+                of, do_write, empty_ok={of[0] + "a": False, of[1]: False}
+            )
+        with pytest.raises(ValueError):
+            j = ppg.MultiFileGeneratingJob(
+                of, do_write, empty_ok={of[0]: False, of[1]: False}
+            )
+        with pytest.raises(ValueError):
+            j = ppg.MultiFileGeneratingJob(
+                of, do_write, empty_ok={of[0]: False, of[1]: False, "nosuchfile": True}
+            )
+
     def test_exception_destroys_all_files(self):
         of = ["out/a", "out/b"]
 
@@ -662,9 +699,7 @@ class TestMultiFileGeneratingJob:
 
     def test_invalidation_removes_all_files(self, new_pipegraph):
         of = ["out/a", "out/b"]
-        sentinel = (
-            "out/sentinel"
-        )  # hack so this one does something different the second time around...
+        sentinel = "out/sentinel"  # hack so this one does something different the second time around...
 
         def do_write():
             if os.path.exists(sentinel):
@@ -806,7 +841,7 @@ shared_value = ""
 
 @pytest.mark.usefixtures("new_pipegraph")
 class TestDataLoadingJob:
-    def test_modifies_slave(self):
+    def test_modifies_worker(self):
         # global shared
         # shared = "I was the the global in the mcp"
         def load():
@@ -994,7 +1029,7 @@ class TestDataLoadingJob:
         assert isinstance(job_dl.exception, ValueError)
 
     def test_prev_dataloading_jobs_not_done_if_there_is_a_non_dataloading_job_inbetween_that_is_done(
-        self
+        self,
     ):
         # so, A = DataLoadingJob, B = FileGeneratingJob, C = DataLoadingJob, D = FileGeneratingJob
         # D.depends_on(C)

@@ -33,18 +33,19 @@ import os
 import stat
 import sys
 import dis
+import inspect
 import shutil
 import hashlib
 import traceback
 import platform
 import time
 import six
+import types
 import pickle
 from io import StringIO
 from pathlib import Path
 from . import ppg_exceptions
 from . import util
-
 
 is_pypy = platform.python_implementation() == "PyPy"
 module_type = type(sys)
@@ -211,12 +212,12 @@ class Job(object):
             self.stderr = None
             self.exception = None
             self.was_run = False
-            self.was_done_on = set()  # on which slave(s) was this job run?
+            self.was_done_on = set()  # on which worker(s) was this job run?
             self.was_loaded = False
             self.was_invalidated = False
             self.invalidation_count = (
-                0
-            )  # used to save some time in graph.distribute_invariant_changes
+                0  # used to save some time in graph.distribute_invariant_changes
+            )
             self.was_cleaned_up = False
             self.always_runs = False
             self.start_time = None
@@ -407,8 +408,8 @@ class Job(object):
             "Called load() on a j'ob that had is_loadable, but did not overwrite load() as it should"
         )
 
-    def runs_in_slave(self):
-        """Is this a job that runs in our slave, ie. in a spawned job"""
+    def runs_in_worker(self):
+        """Is this a job that runs in our worker, ie. in a spawned job"""
         return True
 
     def modifies_jobgraph(self):
@@ -440,9 +441,7 @@ class Job(object):
                     # but that does not mean that it's done enough to start the next one. Was_run means it has returned.
                     # On the other hand, it might have been a job that didn't need to run, then was_invalidated should be false.
                     # or it was a loadable job anyhow, then it doesn't matter.
-                    return (
-                        False
-                    )  # pragma: no cover - there is a test case, it triggers, but coverage misses it apperantly
+                    return False  # pragma: no cover - there is a test case, it triggers, but coverage misses it apperantly
                 # else:
                 # continue  # go and check the next one
             elif preq._pruned:
@@ -554,53 +553,59 @@ class _InvariantJob(Job):
     def depends_on(self, *job_joblist_or_list_of_jobs):
         raise ppg_exceptions.JobContractError("Invariants can't have dependencies")
 
-    def runs_in_slave(self):
+    def runs_in_worker(self):
         return False
 
 
 def get_cython_filename_and_line_no(cython_func):
-    first_doc_line = cython_func.__doc__.split("\n")[0]
-    if not first_doc_line.startswith("File:"):
-        raise ValueError(
-            "No file/line information in doc string. Make sure your cython is compiled with -p (or #embed_pos_in_docstring=True atop your pyx"
+    pattern = re.compile(r'.* file "(?P<file_name>.*)", line (?P<line>\d*)>')
+    match = pattern.match(str(cython_func.func_code))
+    if match:
+        line_no = int(match.group("line"))
+        filename = match.group("file_name")
+    else:
+        first_doc_line = cython_func.__doc__.split("\n")[0]
+        module_name = cython_func.__module__
+        if not first_doc_line.startswith("File:"):
+            raise ValueError(
+                "No file/line information in doc string. Make sure your cython is compiled with -p (or #embed_pos_in_docstring=True atop your pyx"
+            )
+        line_no = int(
+            first_doc_line[
+                first_doc_line.find("starting at line ")
+                + len("starting at line ") : first_doc_line.find(")")
+            ]
         )
-    line_no = int(
-        first_doc_line[
-            first_doc_line.find("starting at line ")
-            + len("starting at line ") : first_doc_line.find(")")
-        ]
-    )
-
-    # find the right module
-    module_name = cython_func.im_class.__module__
-    found = False
-    for name in sorted(sys.modules):
-        if name == module_name or name.endswith("." + module_name):
-            try:
-                if (
-                    getattr(sys.modules[name], cython_func.im_class.__name__)
-                    == cython_func.im_class
-                ):
-                    found = sys.modules[name]
-                    break
-            except AttributeError:  # pragma: no cover
-                continue
-        elif hasattr(sys.modules[name], module_name):
-            sub_module = getattr(sys.modules[name], module_name)
-            try:  # pragma: no cover
-                if (
-                    getattr(sub_module, cython_func.im_class.__name__)
-                    == cython_func.im_class
-                ):
-                    found = sys.moduls[name].sub_module
-                    break
-            except AttributeError:
-                continue
-    if not found:  # pragma: no cover
-        raise ValueError("Could not find module for %s" % cython_func)
-    filename = found.__file__.replace(".so", ".pyx").replace(
-        ".pyc", ".py"
-    )  # pyc replacement is for mock testing
+        # find the right module
+        module_name = cython_func.im_class.__module__
+        found = False
+        for name in sorted(sys.modules):
+            if name == module_name or name.endswith("." + module_name):
+                try:
+                    if (
+                        getattr(sys.modules[name], cython_func.im_class.__name__)
+                        == cython_func.im_class
+                    ):
+                        found = sys.modules[name]
+                        break
+                except AttributeError:  # pragma: no cover
+                    continue
+            elif hasattr(sys.modules[name], module_name):
+                sub_module = getattr(sys.modules[name], module_name)
+                try:  # pragma: no cover
+                    if (
+                        getattr(sub_module, cython_func.im_class.__name__)
+                        == cython_func.im_class
+                    ):
+                        found = sys.moduls[name].sub_module
+                        break
+                except AttributeError:
+                    continue
+        if not found:  # pragma: no cover
+            raise ValueError("Could not find module for %s" % cython_func)
+        filename = found.__file__.replace(".so", ".pyx").replace(
+            ".pyc", ".py"
+        )  # pyc replacement is for mock testing
     return filename, line_no
 
 
@@ -669,104 +674,129 @@ class FunctionInvariant(_InvariantJob):
                 id(self),
             )
 
-    def _get_invariant(self, old, all_invariant_stati, version_info=sys.version_info):
-        if self.function is None:
-            return (
-                None
-            )  # since the 'default invariant' is False, this will still read 'invalidated the first time it's being used'
-        if not hasattr(self.function, "__code__"):
-            if str(self.function).startswith("<built-in function"):
-                return str(self.function)
-            elif hasattr(self.function, "im_func") and (
-                "cyfunction" in repr(self.function.im_func)
-                or repr(self.function.im_func).startswith("<built-in function")
-            ):
-                return self.get_cython_source(self.function)
-            else:
-                # print(repr(self.function))
-                # print(repr(self.function.im_func))
-                raise ValueError("Can't handle this object %s" % self.function)
-        key = id(self.function.__code__)
-        # code_filepath = self.function.__code__.co_filename
-        # if not os.path.isabs(code_filepath):
-        #    if self.absolute_path is None:
-        #        raise ValueError(f"No absolute path to code file {code_filepath} is given.")
-        #    else:
-        #        code_filepath = os.path.join(self.absolute_path, os.path.basename(code_filepath))
-        if isinstance(old, tuple):
-            old_co_code = old[0]
-            old_lineno = old[1]
-            old_funchash = old[2]
-            old_closure = old[3]
-            #            new_filehash = self.get_file_hash(code_filepath)
-            new_co_code = self.function.__code__.co_code
-            new_line_no = self.function.__code__.co_firstlineno
-            if (
-                new_co_code == old_co_code and old_lineno == new_line_no
-            ):  # same file, same line -> same func
-                return old
-            else:
-                if key not in util.global_pipegraph.func_hashes:
-                    util.global_pipegraph.func_hashes[key] = self.dis_code(
-                        self.function.__code__, self.function
-                    )
-                new_funchash = util.global_pipegraph.func_hashes[key]
-                new_closure = self.extract_closure(self.function)
-                res = (new_co_code, new_line_no, new_funchash, new_closure)
-                if self.func_hash_didnt_change(
-                    old_funchash, old_closure, new_funchash, new_closure, version_info
-                ):
-                    raise ppg_exceptions.NothingChanged(res)
-                else:
-                    return res
+    @classmethod
+    def _get_invariant_from_non_python_function(cls, function):
+        if str(function).startswith("<built-in function"):
+            return str(function)
+        elif (
+            hasattr(function, "im_func")
+            and (
+                "cyfunction" in repr(function.im_func)
+                or repr(function.im_func).startswith("<built-in function")
+            )
+        ) or "cython_function_or_method" in str(type(function)):
+            return cls.get_cython_source(function)
+        elif isinstance(
+            function, types.MethodType
+        ) and "cython_function_or_method" in str(type(function.__func__)):
+            return cls.get_cython_source(function.__func__)
         else:
-            # new_filehash = self.get_file_hash(code_filepath)
-            new_co_code = self.function.__code__.co_code
-
-            new_line_no = self.function.__code__.co_firstlineno
-            if key not in util.global_pipegraph.func_hashes:
-                util.global_pipegraph.func_hashes[key] = self.dis_code(
-                    self.function.__code__, self.function
-                )
-            new_funchash = util.global_pipegraph.func_hashes[key]
-            new_closure = self.extract_closure(self.function)
-            res = (new_co_code, new_line_no, new_funchash, new_closure)
-            if isinstance(old, str):
-                if old == new_funchash + new_closure:
-                    raise ppg_exceptions.NothingChanged(res)
-            return res
+            # print(repr(function))
+            # print(repr(function.im_func))
+            raise ValueError("Can't handle this object %s" % function)
 
     @classmethod
-    def func_hash_didnt_change(
-        cls,
-        old_funchash,
-        old_closure,
-        new_funchash,
-        new_closure,
-        version_info=sys.version_info,
-    ):
-        """Compare two function hashesh, allow 3.7 derived changes in how
-        inner functions/lambdas are handled"""
-        if new_funchash == old_funchash and new_closure == old_closure:
-            # unrelated change in the file
-            return True
-        elif (
-            version_info >= (3, 7)
-            and "\ninner no " in old_funchash
-            and old_funchash[: old_funchash.find("\ninner no") + 1] == new_funchash
-        ):
-            # change in how we handled lambdas within functions
-            return True
-        return False
+    def _get_func_hash(cls, key, function):
+        if not util.global_pipegraph or key not in util.global_pipegraph.func_hashes:
+            source = inspect.getsource(function).strip()
+            # cut off function definition / name, but keep parameters
+            if source.startswith("def"):
+                source = source[source.find("(") :]
+            # filter doc string
+            if function.__doc__:
+                for prefix in ['"""', "'''", '"', "'"]:
+                    if prefix + function.__doc__ + prefix in source:
+                        source = source.replace(prefix + function.__doc__ + prefix, "",)
+            value = (
+                source,
+                cls.dis_code(function.__code__, function),
+            )
+            if not util.global_pipegraph:
+                return value
+            util.global_pipegraph.func_hashes[key] = value
 
-    def extract_closure(self, function):
+        return util.global_pipegraph.func_hashes[key]
+
+    @classmethod
+    def _hash_function(cls, function):
+        key = id(function.__code__)
+        new_source, new_funchash = cls._get_func_hash(key, function)
+        new_closure = cls.extract_closure(function)
+        return new_source, new_funchash, new_closure
+
+    def _get_invariant(self, old, all_invariant_stati, version_info=sys.version_info):
+        if self.function is None:
+            # since the 'default invariant' is False, this will still read 'invalidated the first time it's being used'
+            return None
+        if (not hasattr(self.function, "__code__")) or (
+            "cython_function_or_method" in str(type(self.function))
+            or (
+                isinstance(self.function, types.MethodType)
+                and "cython_function_or_method" in str(type(self.function.__func__))
+            )
+        ):
+
+            return self._get_invariant_from_non_python_function(self.function)
+        new_source, new_funchash, new_closure = self._hash_function(self.function)
+        return self._compare_new_and_old(new_source, new_funchash, new_closure, old)
+
+    @staticmethod
+    def _compare_new_and_old(new_source, new_funchash, new_closure, old):
+        new = {
+            "source": new_source,
+            str(sys.version_info[:2]): (new_funchash, new_closure),
+        }
+
+        if isinstance(old, dict):
+            pass  # the current style
+        elif isinstance(old, tuple):
+            # the previous style.
+            old_funchash = old[2]
+            old_closure = old[3]
+            old = {
+                # if you change python version and pypipegraph at the same time, you're out of luck and will possibly rebuild
+                str(sys.version_info[:2]): (old_funchash, old_closure,)
+            }
+        elif isinstance(old, str):
+            # the old old style, just concatenated.
+            old = {"old": old}
+            new["old"] = new_funchash + new_closure
+        elif old is False:  # never ran before
+            return new
+        elif (
+            old is None
+        ):  # if you provided a None type instead of a function, you will run into this
+            return new
+        else:  # pragma: no cover
+            raise ValueError(
+                "Could not understand old FunctionInvariant invariant. Was Type(%s): %s"
+                % (type(old), old)
+            )
+        unchanged = False
+        for k in set(new.keys()).intersection(old.keys()):
+            if k != "_version" and new[k] == old[k]:
+                unchanged = True
+        out = old.copy()
+        out.update(new)
+        out[
+            "_version"
+        ] = 3  # future proof, since this is *at least* the third way we're doing this
+        if "old" in out:
+            del out["old"]
+        if unchanged:
+            raise ppg_exceptions.NothingChanged(out)
+        return out
+
+    @staticmethod
+    def extract_closure(function):
+        """extract the bound variables from a function into a string representation"""
         try:
             closure = function.func_closure
         except AttributeError:
             closure = function.__closure__
         output = ""
         if closure:
-            for name, cell in zip(self.function.__code__.co_freevars, closure):
+            for name, cell in zip(function.__code__.co_freevars, closure):
                 # we ignore references to self - in that use case you're expected
                 # to make your own ParameterInvariants, and we could not detect
                 # self.parameter anyhow (only self would be bound)
@@ -807,12 +837,6 @@ class FunctionInvariant(_InvariantJob):
         + "|"
         + "(<code\tobject\t<[^>]+>,\tfile\t'[^']+',\tline\t[0-9]+)"  # that's the cpython way  # that's how they look like in pypy. More sensibly, actually
     )
-
-    @classmethod
-    def get_file_hash(self, filename):
-        if filename not in util.global_pipegraph.file_hashes:
-            util.global_pipegraph.file_hashes[filename] = util.checksum_file(filename)
-        return util.global_pipegraph.file_hashes[filename]
 
     @classmethod
     def dis_code(cls, code, function, version_info=sys.version_info):
@@ -859,6 +883,7 @@ class FunctionInvariant(_InvariantJob):
 
         # check there's actually the file and line no documentation
         filename, line_no = get_cython_filename_and_line_no(cython_func)
+        print(filename, line_no)
 
         # load the source code
         op = open(filename, "rb")
@@ -882,13 +907,15 @@ class FunctionInvariant(_InvariantJob):
             remaining_lines = text.split("\n")
         last_line = len(remaining_lines)
         for ii, line in enumerate(remaining_lines):
+            if ii == 0:
+                continue
             line_strip = line.strip()
             if line_strip:
-                indent = len(line) - len(line_strip)
-                if indent < first_line_indent:
+                indent = len(line) - len(line.lstrip())
+                if indent <= first_line_indent:
                     last_line = ii
                     break
-        return "\n".join(remaining_lines[:last_line]).strip()
+        return "\n".join(remaining_lines[:last_line])
 
 
 class ParameterInvariant(_InvariantJob):
@@ -971,9 +998,10 @@ class RobustFileChecksumInvariant(_InvariantJob):
                     old = all_invariant_stati[job_id]
                     if isinstance(old, tuple):
                         if len(old) == 2:
-                            old_filesize, old_chksum = (
-                                old
-                            )  # pragma: no cover - upgrade from older pipegraph and move at the same time
+                            (
+                                old_filesize,
+                                old_chksum,
+                            ) = old  # pragma: no cover - upgrade from older pipegraph and move at the same time
                         else:
                             dummy_old_filetime, old_filesize, old_chksum = old
                         if old_filesize == filesize:
@@ -1302,6 +1330,8 @@ class MultiFileGeneratingJob(FileGeneratingJob):
         """If @rename_broken is set, any eventual outputfile that exists
         when the job crashes will be renamed to output_filename + '.broken'
         (overwriting whatever was there before)
+
+        @empty_ok may be a bool or a dict (filenames: str -> bool)
         """
         # filenames = sorted([verify_job_id(f) for f in filenames])
         self.verify_arguments(function, rename_broken, empty_ok)
@@ -1314,6 +1344,11 @@ class MultiFileGeneratingJob(FileGeneratingJob):
         self.rename_broken = rename_broken
         self.do_ignore_code_changes = False
         self.empty_ok = empty_ok
+        if isinstance(self.empty_ok, dict):
+            if set(self.filenames) != set(self.empty_ok):
+                raise ValueError(
+                    "empty_ok had a different set of filenames than were passed to the MultiFileGeneratingJob"
+                )
 
     def verify_arguments(self, function, rename_broken, empty_ok):
         if not hasattr(function, "__call__"):
@@ -1334,7 +1369,11 @@ class MultiFileGeneratingJob(FileGeneratingJob):
 
     def calc_is_done(self, depth=0):
         for fn in self.filenames:
-            if self.empty_ok:
+            if (
+                self.empty_ok is True
+                or isinstance(self.empty_ok, dict)
+                and self.empty_ok[fn]
+            ):
                 if not util.file_exists(fn):
                     return False
             else:
@@ -1375,20 +1414,25 @@ class MultiFileGeneratingJob(FileGeneratingJob):
             six.reraise(*exc_info)
         self._is_done = None
         missing_files = []
-        if self.empty_ok:
-            filecheck = util.file_exists
-        else:
-            filecheck = util.output_file_exists
-        for f in self.filenames:
-            if not filecheck(f):
-                missing_files.append(f)
+        for fn in self.filenames:
+            if (
+                self.empty_ok is True
+                or isinstance(self.empty_ok, dict)
+                and self.empty_ok[fn]
+            ):
+                filecheck = util.file_exists
+            else:
+                filecheck = util.output_file_exists
+            if not filecheck(fn):
+                missing_files.append(fn)
+
         if missing_files:
             raise ppg_exceptions.JobContractError(
                 "%s did not create all of its files.\nMissing were:\n %s"
                 % (self.job_id, "\n".join([str(x) for x in missing_files]))
             )
 
-    def runs_in_slave(self):
+    def runs_in_worker(self):
         return True
 
 
@@ -1414,7 +1458,7 @@ class TempFileGeneratingJob(FileGeneratingJob):
         except (OSError, IOError):  # pragma: no cover
             pass
 
-    def runs_in_slave(self):
+    def runs_in_worker(self):
         return True
 
     def calc_is_done(self, depth=0):
