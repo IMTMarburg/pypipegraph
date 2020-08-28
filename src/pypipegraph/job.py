@@ -120,7 +120,7 @@ def check_closure_vars(f1, f2):
         return False
     for item_name in ["nonlocals"]:
         map1 = getattr(cv1, item_name)
-        map2 = getattr(cv1, item_name)
+        map2 = getattr(cv2, item_name)
         for key in map1:
             o1 = map1[key]
             if key not in map2:
