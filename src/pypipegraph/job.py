@@ -108,6 +108,36 @@ def was_inited_before(obj, cls):
         return False
 
 
+def check_closure_vars(f1, f2):
+    """
+    this checks whether bound functions are identical instead of comparing
+    memory addresses for nonlocals. It might be neccessary to do improve that
+    and also check globals and buildins differently.
+    """
+    cv1 = inspect.getclosurevars(f1)
+    cv2 = inspect.getclosurevars(f2)
+    if len(cv1.nonlocals) != len(cv2.nonlocals):
+        return False
+    for item_name in ["nonlocals"]:
+        map1 = getattr(cv1, item_name)
+        map2 = getattr(cv1, item_name)
+        for key in map1:
+            o1 = map1[key]
+            if key not in map2:
+                return False
+            o2 = map2[key]
+            if callable(o1) and callable(o2):
+                if not functions_equal(o1, o2):
+                    return False
+            else:
+                if o1 != o2:
+                    return False
+    for item_name in ["globals", "builtins", "unbound"]:
+        if getattr(cv1, item_name) != getattr(cv2, item_name):
+            return False
+    return True
+
+
 def functions_equal(a, b):
     if a is None and b is None:
         return True
@@ -115,7 +145,7 @@ def functions_equal(a, b):
         return False
     elif hasattr(a, "__code__") and hasattr(a, "__closure__"):
         if hasattr(b, "__code__") and hasattr(b, "__closure__"):
-            return (a.__code__ == b.__code__) and (a.__closure__ == b.__closure__)
+            return (a.__code__ == b.__code__) and check_closure_vars(a, b)
         else:
             return False
     else:
@@ -563,6 +593,8 @@ def get_cython_filename_and_line_no(cython_func):
     if match:
         line_no = int(match.group("line"))
         filename = match.group("file_name")
+        modulespec = getattr(cython_func, "__globals__")["__spec__"]
+        filename = str(Path(modulespec.origin).parent / Path(filename).name)
     else:
         first_doc_line = cython_func.__doc__.split("\n")[0]
         module_name = cython_func.__module__
@@ -883,7 +915,6 @@ class FunctionInvariant(_InvariantJob):
 
         # check there's actually the file and line no documentation
         filename, line_no = get_cython_filename_and_line_no(cython_func)
-        print(filename, line_no)
 
         # load the source code
         op = open(filename, "rb")
@@ -1364,7 +1395,7 @@ class MultiFileGeneratingJob(FileGeneratingJob):
                 )  # todo: test
             if self.empty_ok != empty_ok:
                 raise ValueError(
-                    "MultiFileGeneratingJob with two different rename_brokens"
+                    "MultiFileGeneratingJob with two different empty_ok"
                 )  # todo: test
 
     def calc_is_done(self, depth=0):
