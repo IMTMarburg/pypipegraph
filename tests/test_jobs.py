@@ -26,6 +26,7 @@ import os
 import sys
 import pytest
 import pypipegraph as ppg
+from pathlib import Path
 from .shared import write, assertRaises, read, Dummy, append
 
 global_test = 0
@@ -833,6 +834,44 @@ class TestMultiFileGeneratingJob:
         c.depends_on(b)
         ppg.run_pipegraph()
         assert read("out/C") == "C"
+
+    def test_closure_check_fails(self):
+        o1 = "out/s.txt"
+        o2 = "out/st.txt"
+
+        def do_align():
+            job_dir = Path("out")
+            for x in ["s.txt", "st.txt"]:
+                with (job_dir / x).open("w") as op:
+                    op.write("ok")
+
+        def do_align2():
+            for x in ["s.txt", "st.txt"]:
+                with open(f"out/{x}", "w") as op:
+                    op.write("ok")
+
+        def inner():
+            ppg.MultiFileGeneratingJob([o1, o2], do_align)
+            ppg.MultiFileGeneratingJob([o1, o2], do_align2)
+            ppg.run_pipegraph()
+
+        assertRaises(ValueError, inner)
+
+    def test_closure_check_works(self):
+        o1 = "out/s.txt"
+        o2 = "out/st.txt"
+
+        def do_align():
+            job_dir = Path("out")
+            for x in ["s.txt", "st.txt"]:
+                with (job_dir / x).open("w") as op:
+                    op.write("ok")
+
+        ppg.MultiFileGeneratingJob([o1, o2], do_align)
+        ppg.MultiFileGeneratingJob([o1, o2], do_align)
+        ppg.run_pipegraph()
+        assert os.path.exists(o1)
+        assert os.path.exists(o2)
 
 
 test_modifies_shared_global = []

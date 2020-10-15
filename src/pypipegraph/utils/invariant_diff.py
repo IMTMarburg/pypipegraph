@@ -27,7 +27,7 @@ def print_status_not_found(status_prefix):
     sys.exit(1)
 
 
-def main():  # noqa: C901
+def main():  # noqa
 
     if len(sys.argv) < 2:
         print_usage()
@@ -37,7 +37,7 @@ def main():  # noqa: C901
     job_id_to_compare = None
     for x in sys.argv[1:]:
         if x.startswith("--status="):
-            status_prefix = x[x.find("=") + 1 :]
+            status_prefix = x[x.find("=") + 1:]
         elif x.startswith("--all"):
             modus = "all"
         else:

@@ -25,6 +25,7 @@ import os
 import stat as stat_module
 import hashlib
 import time
+import pandas as pd
 
 global_pipegraph = None
 is_remote = False
@@ -214,6 +215,9 @@ def freeze(obj):
 
     elif isinstance(obj, set):
         return frozenset(obj)
+    elif isinstance(obj, pd.DataFrame):
+        hashed = pd.util.hash_pandas_object(obj)
+        return tuple([freeze(x) for x in hashed])
     else:
         msg = "Unsupported type: %r" % type(obj).__name__
         raise TypeError(msg)
