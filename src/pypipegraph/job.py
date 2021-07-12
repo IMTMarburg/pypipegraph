@@ -408,8 +408,7 @@ class Job(object):
         return self.invariant_cache[1]
 
     def _get_invariant(self, old, all_invariant_stati):
-        """The actual workhorse/sub class specific function for get_invariant
-        """
+        """The actual workhorse/sub class specific function for get_invariant"""
         return False
 
     def is_done(self, depth=0):
@@ -443,8 +442,7 @@ class Job(object):
         return True
 
     def modifies_jobgraph(self):
-        """Is this a job that can modify the jobgraph at runtime?
-        """
+        """Is this a job that can modify the jobgraph at runtime?"""
         return False
 
     def invalidated(self, reason=""):
@@ -462,8 +460,7 @@ class Job(object):
                 dep.invalidated(reason="preq invalidated %s" % self)
 
     def can_run_now(self):
-        """Can this job run right now?
-        """
+        """Can this job run right now?"""
         for preq in self.prerequisites:
             if preq.is_done():
                 if preq.was_invalidated and not preq.was_run and not preq.is_loadable():
@@ -538,8 +535,7 @@ class Job(object):
         return hash(self.job_id)
 
     def __add__(self, other_job):
-        """Creates JobLists from two jobs
-        """
+        """Creates JobLists from two jobs"""
 
         def iter():
             yield self
@@ -571,11 +567,9 @@ class Job(object):
     def __repr__(self):
         return "%s(%s)" % (self.__class__.__name__, self.job_id)
 
-    @property # ppg2 style
+    @property  # ppg2 style
     def files(self):
         return self.filenames
-
-
 
 
 class _InvariantJob(Job):
@@ -744,7 +738,10 @@ class FunctionInvariant(_InvariantJob):
             if function.__doc__:
                 for prefix in ['"""', "'''", '"', "'"]:
                     if prefix + function.__doc__ + prefix in source:
-                        source = source.replace(prefix + function.__doc__ + prefix, "",)
+                        source = source.replace(
+                            prefix + function.__doc__ + prefix,
+                            "",
+                        )
             value = (
                 source,
                 cls.dis_code(function.__code__, function),
@@ -793,7 +790,10 @@ class FunctionInvariant(_InvariantJob):
             old_closure = old[3]
             old = {
                 # if you change python version and pypipegraph at the same time, you're out of luck and will possibly rebuild
-                str(sys.version_info[:2]): (old_funchash, old_closure,)
+                str(sys.version_info[:2]): (
+                    old_funchash,
+                    old_closure,
+                )
             }
         elif isinstance(old, str):
             # the old old style, just concatenated.
@@ -1001,7 +1001,7 @@ class ParameterInvariant(_InvariantJob):
 
 
 class RobustFileChecksumInvariant(_InvariantJob):
-    """ Invalidates when the (md5) checksum of a file changed.
+    """Invalidates when the (md5) checksum of a file changed.
     Checksum only get's recalculated if the file modification time changed.
     RobustFileChecksumInvariant can find a file again if it was moved
     (but not if it was renamed)
@@ -1344,8 +1344,7 @@ class FileGeneratingJob(Job):
 
 
 class MultiFileGeneratingJob(FileGeneratingJob):
-    """Create multiple files - recreate all of them if at least one is missing.
-    """
+    """Create multiple files - recreate all of them if at least one is missing."""
 
     def __new__(cls, filenames, *args, **kwargs):
         if isinstance(filenames, str):
