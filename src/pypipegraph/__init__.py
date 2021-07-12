@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-__version__ = '0.196'
+__version__ = '0.197'
 
 from .graph import run_pipegraph, new_pipegraph
 from .ppg_exceptions import (
