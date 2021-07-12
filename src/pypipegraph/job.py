@@ -571,6 +571,12 @@ class Job(object):
     def __repr__(self):
         return "%s(%s)" % (self.__class__.__name__, self.job_id)
 
+    @property # ppg2 style
+    def files(self):
+        return self.filenames
+
+
+
 
 class _InvariantJob(Job):
     """common code for all invariant jobs"""
